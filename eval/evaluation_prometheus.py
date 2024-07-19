@@ -85,8 +85,8 @@ def get_grading_dict(responses,
                      topic,
                      tokenizer,
                      model,
-                     prompt_template_path="./prompts/eval_prometheus_no_ref.prompt",
-                     rubric_path="./prompts/eval_rubric_5.json",
+                     prompt_template_path="./eval_prometheus_no_ref.prompt",
+                     rubric_path="./eval_rubric_5.json",
                      disable_sample=False,
                      temperature=0.01,
                      top_p=0.95,
@@ -165,15 +165,15 @@ if __name__ == "__main__":
     parser.add_argument('-o', '--output_path', required=True, help='Path to save the output JSON file')
     parser.add_argument('-t', "--topic", required=True, help="Topic of the script your going to analyze")
 
-    parser.add_argument("--prompt_template_path", default="./prompts/eval_prometheus_no_ref.prompt",
+    parser.add_argument("--prompt_template_path", default="./eval_prometheus_no_ref.prompt",
                         help='path to evaluation prometheus prompt template')
     parser.add_argument("--rubric_path", default="./prompts/eval_rubric_5.json", help='path to rubric json file')
 
     parser.add_argument('--tokenizer', default="meta-llama/Llama-2-7b-chat-hf")
     parser.add_argument('--model',
-                        choices=["kaist-ai/prometheus-13b-v1.0", "kaist-ai/prometheus-7b-v1.0"],
-                        default="kaist-ai/prometheus-13b-v1.0",
-                        help="Model to use; options are 'kaist-ai/prometheus-13b-v1.0' or 'kaist-ai/prometheus-7b-v1.0'")
+                        choices=["prometheus-eval/prometheus-13b-v1.0", "prometheus-eval/prometheus-7b-v1.0"],
+                        default="prometheus-eval/prometheus-13b-v1.0",
+                        help="Model to use; options are 'prometheus-eval/prometheus-13b-v1.0' or 'prometheus-eval/prometheus-7b-v1.0'")
     parser.add_argument('--disable_sample', action='store_true', help='Whether to disable sampling; default is False')
     parser.add_argument('--temperature', type=float, default=0.01, help='Temperature for generation; default is 0.01')
     parser.add_argument('--top_p', type=float, default=0.95, help='Top P for generation; default is 0.95')
