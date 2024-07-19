@@ -1,11 +1,18 @@
 """
-STORM Wiki pipeline powered by GPT-3.5/4 and You.com search engine.
+This STORM Wiki pipeline powered by GPT-3.5/4 and local retrieval model that uses Qdrant.
 You need to set up the following environment variables to run this script:
     - OPENAI_API_KEY: OpenAI API key
     - OPENAI_API_TYPE: OpenAI API type (e.g., 'openai' or 'azure')
-    - AZURE_API_BASE: Azure API base URL if using Azure API
-    - AZURE_API_VERSION: Azure API version if using Azure API
-    - YDC_API_KEY: You.com API key; or, BING_SEARCH_API_KEY: Bing Search API key
+    - QDRANT_API_KEY: Qdrant API key (needed ONLY if online vector store was used)
+
+You will also need an existing Qdrant vector store either saved in a folder locally offline or in a server online.
+If not, then you would need a CSV file with documents, and the script is going to create the vector store for you.
+The CSV should be in the following format:
+content  | title  |  url  |  description
+I am a document. | Document 1 | docu-n-112 | A self-explanatory document.
+I am another document. | Document 2 | docu-l-13 | Another self-explanatory document.
+
+Notice that the URL will be a unique identifier for the document so ensure different documents have different urls.
 
 Output will be structured as below
 args.output_dir/
@@ -20,17 +27,21 @@ args.output_dir/
 """
 
 import os
+import sys
 from argparse import ArgumentParser
 
 from knowledge_storm import STORMWikiRunnerArguments, STORMWikiRunner, STORMWikiLMConfigs
+from knowledge_storm.rm import VectorRM
 from knowledge_storm.lm import OpenAIModel, AzureOpenAIModel
-from knowledge_storm.rm import YouRM, BingSearch
 from knowledge_storm.utils import load_api_key
 
 
 def main(args):
+    # Load API key from the specified toml file path
     load_api_key(toml_file_path='secrets.toml')
-    lm_configs = STORMWikiLMConfigs()
+
+    # Initialize the language model configurations
+    engine_lm_configs = STORMWikiLMConfigs()
     openai_kwargs = {
         'api_key': os.getenv("OPENAI_API_KEY"),
         'temperature': 1.0,
@@ -47,7 +58,7 @@ def main(args):
         openai_kwargs['api_version'] = os.getenv('AZURE_API_VERSION')
 
     # STORM is a LM system so different components can be powered by different models.
-    # For a good balance between cost and quality, you can choose a cheaper/faster model for conv_simulator_lm
+    # For a good balance between cost and quality, you can choose a cheaper/faster model for conv_simulator_lm 
     # which is used to split queries, synthesize answers in the conversation. We recommend using stronger models
     # for outline_gen_lm which is responsible for organizing the collected information, and article_gen_lm
     # which is responsible for generating sections with citations.
@@ -57,12 +68,13 @@ def main(args):
     article_gen_lm = ModelClass(model=gpt_4_model_name, max_tokens=700, **openai_kwargs)
     article_polish_lm = ModelClass(model=gpt_4_model_name, max_tokens=4000, **openai_kwargs)
 
-    lm_configs.set_conv_simulator_lm(conv_simulator_lm)
-    lm_configs.set_question_asker_lm(question_asker_lm)
-    lm_configs.set_outline_gen_lm(outline_gen_lm)
-    lm_configs.set_article_gen_lm(article_gen_lm)
-    lm_configs.set_article_polish_lm(article_polish_lm)
+    engine_lm_configs.set_conv_simulator_lm(conv_simulator_lm)
+    engine_lm_configs.set_question_asker_lm(question_asker_lm)
+    engine_lm_configs.set_outline_gen_lm(outline_gen_lm)
+    engine_lm_configs.set_article_gen_lm(article_gen_lm)
+    engine_lm_configs.set_article_polish_lm(article_polish_lm)
 
+    # Initialize the engine arguments
     engine_args = STORMWikiRunnerArguments(
         output_dir=args.output_dir,
         max_conv_turn=args.max_conv_turn,
@@ -71,15 +83,30 @@ def main(args):
         max_thread_num=args.max_thread_num,
     )
 
-    # STORM is a knowledge curation system which consumes information from the retrieval module.
-    # Currently, the information source is the Internet and we use search engine API as the retrieval module.
-    if args.retriever == 'bing':
-        rm = BingSearch(bing_search_api=os.getenv('BING_SEARCH_API_KEY'), k=engine_args.search_top_k)
-    elif args.retriever == 'you':
-        rm = YouRM(ydc_api_key=os.getenv('YDC_API_KEY'), k=engine_args.search_top_k)
+    # Setup VectorRM to retrieve information from your own data
+    rm = VectorRM(collection_name=args.collection_name, device=args.device, k=engine_args.search_top_k)
 
-    runner = STORMWikiRunner(engine_args, lm_configs, rm)
+    # initialize the vector store, either online (store the db on Qdrant server) or offline (store the db locally):
+    if args.vector_db_mode == 'offline':
+        rm.init_offline_vector_db(vector_store_path=args.offline_vector_db_dir)
+    elif args.vector_db_mode == 'online':
+        rm.init_online_vector_db(url=args.online_vector_db_url, api_key=os.getenv('QDRANT_API_KEY'))
 
+    # Update the vector store with the documents in the csv file
+    if args.update_vector_store:
+        rm.update_vector_store(
+            file_path=args.csv_file_path,
+            content_column='content',
+            title_column='title',
+            url_column='url',
+            desc_column='description',
+            batch_size=args.embed_batch_size
+        )
+
+    # Initialize the STORM Wiki Runner
+    runner = STORMWikiRunner(engine_args, engine_lm_configs, rm)
+
+    # run the pipeline
     topic = input('Topic: ')
     runner.run(
         topic=topic,
@@ -92,17 +119,34 @@ def main(args):
     runner.summary()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = ArgumentParser()
     # global arguments
-    parser.add_argument('--output-dir', type=str, default='./results/gpt',
+    parser.add_argument('--output-dir', type=str, default='./results/gpt_retrieval',
                         help='Directory to store the outputs.')
     parser.add_argument('--max-thread-num', type=int, default=3,
                         help='Maximum number of threads to use. The information seeking part and the article generation'
                              'part can speed up by using multiple threads. Consider reducing it if keep getting '
                              '"Exceed rate limit" error when calling LM API.')
-    parser.add_argument('--retriever', type=str, choices=['bing', 'you'],
-                        help='The search engine API to use for retrieving information.')
+    # provide local corpus and set up vector db
+    parser.add_argument('--collection-name', type=str, default="my_documents",
+                        help='The collection name for vector store.')
+    parser.add_argument('--device', type=str, default="mps",
+                        help='The device used to run the retrieval model (mps, cuda, cpu, etc).')
+    parser.add_argument('--vector-db-mode', type=str, choices=['offline', 'online'],
+                        help='The mode of the Qdrant vector store (offline or online).')
+    parser.add_argument('--offline-vector-db-dir', type=str, default='./vector_store',
+                        help='If use offline mode, please provide the directory to store the vector store.')
+    parser.add_argument('--online-vector-db-url', type=str,
+                        help='If use online mode, please provide the url of the Qdrant server.')
+    parser.add_argument('--update-vector-store', action='store_true',
+                        help='If True, update the vector store with the documents in the csv file; otherwise, '
+                             'use the existing vector store.')
+    parser.add_argument('--csv-file-path', type=str,
+                        help='The path of the custom document corpus in CSV format. The CSV file should include '
+                             'content, title, url, and description columns.')
+    parser.add_argument('--embed-batch-size', type=int, default=64,
+                        help='Batch size for embedding the documents in the csv file.')
     # stage of the pipeline
     parser.add_argument('--do-research', action='store_true',
                         help='If True, simulate conversation to research the topic; otherwise, load the results.')
@@ -125,5 +169,4 @@ if __name__ == '__main__':
                         help='Top k collected references for each section title.')
     parser.add_argument('--remove-duplicate', action='store_true',
                         help='If True, remove duplicate content from the article.')
-
     main(parser.parse_args())

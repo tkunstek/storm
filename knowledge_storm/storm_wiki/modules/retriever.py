@@ -1,5 +1,15 @@
-{
-  "generally_unreliable": [
+from typing import Union, List
+from urllib.parse import urlparse
+
+import dspy
+
+from .storm_dataclass import StormInformation
+from ...interface import Retriever, Information
+from ...utils import ArticleTextProcessing
+
+# Internet source restrictions according to Wikipedia standard:
+# https://en.wikipedia.org/wiki/Wikipedia:Reliable_sources/Perennial_sources
+GENERALLY_UNRELIABLE = {
     "112_Ukraine",
     "Ad_Fontes_Media",
     "AlterNet",
@@ -8,12 +18,15 @@
     "Ancestry.com",
     "Answers.com",
     "Antiwar.com",
+    "Anti-Defamation_League",
     "arXiv",
     "Atlas_Obscura_places",
     "Bild",
     "Blaze_Media",
     "Blogger",
     "BroadwayWorld",
+    "California_Globe",
+    "The_Canary",
     "CelebrityNetWorth",
     "CESNUR",
     "ChatGPT",
@@ -21,6 +34,7 @@
     "CoinDesk",
     "Consortium_News",
     "CounterPunch",
+    "Correo_del_Orinoco",
     "Cracked.com",
     "Daily_Express",
     "Daily_Kos",
@@ -30,6 +44,7 @@
     "Distractify",
     "The_Electronic_Intifada",
     "Encyclopaedia_Metallum",
+    "Ethnicity_of_Celebs",
     "Facebook",
     "FamilySearch",
     "Fandom",
@@ -60,6 +75,7 @@
     "Jewish_Virtual_Library",
     "Joshua_Project",
     "Know_Your_Meme",
+    "Land_Transport_Guru",
     "LinkedIn",
     "LiveJournal",
     "Marquis_Who's_Who",
@@ -72,12 +88,19 @@
     "Metro",
     "The_New_American",
     "New_York_Post",
+    "NGO_Monitor",
     "The_Onion",
     "Our_Campaigns",
     "PanAm_Post",
     "Patheos",
     "An_Phoblacht",
     "The_Post_Millennial",
+    "arXiv",
+    "bioRxiv",
+    "medRxiv",
+    "PeerJ Preprints",
+    "Preprints.org",
+    "SSRN",
     "PR_Newswire",
     "Quadrant",
     "Quillette",
@@ -90,12 +113,16 @@
     "Rolling_Stone_(Culture_Council)",
     "Scribd",
     "Scriptural_texts",
+    "Simple_Flying",
     "Sixth_Tone_(politics)",
     "The_Skwawkbox",
     "SourceWatch",
     "Spirit_of_Metal",
     "Sportskeeda",
     "Stack_Exchange",
+    "Stack_Overflow",
+    "MathOverflow",
+    "Ask_Ubuntu",
     "starsunfolded.com",
     "Statista",
     "TASS",
@@ -103,10 +130,12 @@
     "TV.com",
     "TV_Tropes",
     "Twitter",
+    "X.com",
     "Urban_Dictionary",
     "Venezuelanalysis",
     "VGChartz",
     "VoC",
+    "Washington_Free_Beacon",
     "Weather2Travel",
     "The_Western_Journal",
     "We_Got_This_Covered",
@@ -119,12 +148,14 @@
     "Wikipedia",
     "WordPress.com",
     "Worldometer",
-    "YouTube"
-  ],
-  "deprecated": [
+    "YouTube",
+    "ZDNet"}
+DEPRECATED = {
+    "Al_Mayadeen",
     "ANNA_News",
     "Baidu_Baike",
     "China_Global_Television_Network",
+    "The_Cradle",
     "Crunchbase",
     "The_Daily_Caller",
     "Daily_Mail",
@@ -148,6 +179,7 @@
     "Newsmax",
     "NNDB",
     "Occupy_Democrats",
+    "Office_of_Cuba_Broadcasting",
     "One_America_News_Network",
     "Peerage_websites",
     "Press_TV",
@@ -159,14 +191,15 @@
     "Sputnik",
     "The_Sun",
     "Taki's_Magazine",
+    "Tasnim_News_Agency",
     "Telesur",
     "The_Unz_Review",
     "VDARE",
     "Voltaire_Network",
     "WorldNetDaily",
     "Zero_Hedge"
-  ],
-  "blacklisted": [
+}
+BLACKLISTED = {
     "Advameg",
     "bestgore.com",
     "Breitbart_News",
@@ -186,5 +219,32 @@
     "Swarajya",
     "Veterans_Today",
     "ZoomInfo"
-  ]
 }
+
+
+def is_valid_wikipedia_source(url):
+    parsed_url = urlparse(url)
+    # Check if the URL is from a reliable domain
+    combined_set = GENERALLY_UNRELIABLE | DEPRECATED | BLACKLISTED
+    for domain in combined_set:
+        if domain in parsed_url.netloc:
+            return False
+
+    return True
+
+
+class StormRetriever(Retriever):
+    def __init__(self, rm: dspy.Retrieve, k=3):
+        super().__init__(search_top_k=k)
+        self._rm = rm
+        if hasattr(rm, 'is_valid_source'):
+            rm.is_valid_source = is_valid_wikipedia_source
+
+    def retrieve(self, query: Union[str, List[str]], exclude_urls: List[str] = []) -> List[Information]:
+        retrieved_data_list = self._rm(query_or_queries=query, exclude_urls=exclude_urls)
+        for data in retrieved_data_list:
+            for i in range(len(data['snippets'])):
+                # STORM generate the article with citations. We do not consider multi-hop citations.
+                # Remove citations in the source to avoid confusion.
+                data['snippets'][i] = ArticleTextProcessing.remove_citations(data['snippets'][i])
+        return [StormInformation.from_dict(data) for data in retrieved_data_list]

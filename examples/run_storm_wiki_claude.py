@@ -1,10 +1,7 @@
 """
-STORM Wiki pipeline powered by GPT-3.5/4 and You.com search engine.
+STORM Wiki pipeline powered by Claude family models and You.com search engine.
 You need to set up the following environment variables to run this script:
-    - OPENAI_API_KEY: OpenAI API key
-    - OPENAI_API_TYPE: OpenAI API type (e.g., 'openai' or 'azure')
-    - AZURE_API_BASE: Azure API base URL if using Azure API
-    - AZURE_API_VERSION: Azure API version if using Azure API
+    - ANTHROPIC_API_KEY: Anthropic API key
     - YDC_API_KEY: You.com API key; or, BING_SEARCH_API_KEY: Bing Search API key
 
 Output will be structured as below
@@ -23,7 +20,7 @@ import os
 from argparse import ArgumentParser
 
 from knowledge_storm import STORMWikiRunnerArguments, STORMWikiRunner, STORMWikiLMConfigs
-from knowledge_storm.lm import OpenAIModel, AzureOpenAIModel
+from knowledge_storm.lm import ClaudeModel
 from knowledge_storm.rm import YouRM, BingSearch
 from knowledge_storm.utils import load_api_key
 
@@ -31,31 +28,22 @@ from knowledge_storm.utils import load_api_key
 def main(args):
     load_api_key(toml_file_path='secrets.toml')
     lm_configs = STORMWikiLMConfigs()
-    openai_kwargs = {
-        'api_key': os.getenv("OPENAI_API_KEY"),
+    claude_kwargs = {
+        'api_key': os.getenv("ANTHROPIC_API_KEY"),
         'temperature': 1.0,
-        'top_p': 0.9,
+        'top_p': 0.9
     }
-
-    ModelClass = OpenAIModel if os.getenv('OPENAI_API_TYPE') == 'openai' else AzureOpenAIModel
-    # If you are using Azure service, make sure the model name matches your own deployed model name.
-    # The default name here is only used for demonstration and may not match your case.
-    gpt_35_model_name = 'gpt-3.5-turbo' if os.getenv('OPENAI_API_TYPE') == 'openai' else 'gpt-35-turbo'
-    gpt_4_model_name = 'gpt-4o'
-    if os.getenv('OPENAI_API_TYPE') == 'azure':
-        openai_kwargs['api_base'] = os.getenv('AZURE_API_BASE')
-        openai_kwargs['api_version'] = os.getenv('AZURE_API_VERSION')
 
     # STORM is a LM system so different components can be powered by different models.
     # For a good balance between cost and quality, you can choose a cheaper/faster model for conv_simulator_lm
     # which is used to split queries, synthesize answers in the conversation. We recommend using stronger models
     # for outline_gen_lm which is responsible for organizing the collected information, and article_gen_lm
     # which is responsible for generating sections with citations.
-    conv_simulator_lm = ModelClass(model=gpt_35_model_name, max_tokens=500, **openai_kwargs)
-    question_asker_lm = ModelClass(model=gpt_35_model_name, max_tokens=500, **openai_kwargs)
-    outline_gen_lm = ModelClass(model=gpt_4_model_name, max_tokens=400, **openai_kwargs)
-    article_gen_lm = ModelClass(model=gpt_4_model_name, max_tokens=700, **openai_kwargs)
-    article_polish_lm = ModelClass(model=gpt_4_model_name, max_tokens=4000, **openai_kwargs)
+    conv_simulator_lm = ClaudeModel(model='claude-3-haiku-20240307', max_tokens=500, **claude_kwargs)
+    question_asker_lm = ClaudeModel(model='claude-3-sonnet-20240229', max_tokens=500, **claude_kwargs)
+    outline_gen_lm = ClaudeModel(model='claude-3-opus-20240229', max_tokens=400, **claude_kwargs)
+    article_gen_lm = ClaudeModel(model='claude-3-opus-20240229', max_tokens=700, **claude_kwargs)
+    article_polish_lm = ClaudeModel(model='claude-3-opus-20240229', max_tokens=4000, **claude_kwargs)
 
     lm_configs.set_conv_simulator_lm(conv_simulator_lm)
     lm_configs.set_question_asker_lm(question_asker_lm)
@@ -95,7 +83,7 @@ def main(args):
 if __name__ == '__main__':
     parser = ArgumentParser()
     # global arguments
-    parser.add_argument('--output-dir', type=str, default='./results/gpt',
+    parser.add_argument('--output-dir', type=str, default='./results/claude',
                         help='Directory to store the outputs.')
     parser.add_argument('--max-thread-num', type=int, default=3,
                         help='Maximum number of threads to use. The information seeking part and the article generation'
